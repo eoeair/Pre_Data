@@ -13,7 +13,9 @@ Data preparation code to provide consistent and high-performance processing
 4. NW-UCLA：Skeleton  --> `N C T V M`
 5. MIMII：Audio  --> `[SNR[MFCC,device,label]]`
 6. SHL-2024: seqence  --> `Modal Channel Num sample`
-7. ECG5000
+7. ECG5000: seqence
+8. Kuairec
+9. Tenrec
 
 ## Target needs
 

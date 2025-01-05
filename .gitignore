@@ -27,3 +27,9 @@ SHL-2024/data/fft_data
 
 ECG5000/data/*.arff
 ECG5000/data/*.npy
+
+KuaiRec/data/*.csv
+KuaiRec/data/*.db
+
+Tenrec/data/*.csv
+Tenrec/data/*.db
