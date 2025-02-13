@@ -15,7 +15,7 @@ NW-UCLA/data/all_sqe
 NW-UCLA/data/npy
 
 MIMII/data/*.zip
-MIMII/data/*.pkl
+MIMII/data/*.npy
 MIMII/data/6dB
 MIMII/data/0dB
 MIMII/data/-6dB
