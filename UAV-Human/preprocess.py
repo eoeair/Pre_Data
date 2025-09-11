@@ -7,7 +7,6 @@ Main call is pre_normalization:
 """
 
 import math
-import numba
 import psutil
 import numpy as np
 from tqdm import tqdm
@@ -41,7 +40,6 @@ def pre_normalization(data, zaxis=[11, 5]):
     Parallel(n_jobs=psutil.cpu_count(logical=False), verbose=0)(delayed(lambda i,s: align_human_to_vector(i,s,zaxis[0], zaxis[1], [0, 0, 1]))(i,s) for i,s in enumerate(tqdm(data)))
     return data
 
-@numba.jit(nopython=True)
 def rotation_matrix(axis, theta):
     """
     Return the rotation matrix associated with counterclockwise rotation about
@@ -67,21 +65,3 @@ def angle_between(v1, v2):
     v1_u = v1 / np.linalg.norm(v1)
     v2_u = v2 / np.linalg.norm(v2)
     return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
-
-@numba.jit(nopython=True)
-def x_rotation(vector, theta):
-    """Rotates 3-D vector around x-axis"""
-    R = np.array([[1, 0, 0], [0, np.cos(theta), -np.sin(theta)], [0, np.sin(theta), np.cos(theta)]])
-    return np.dot(R, vector)
-
-@numba.jit(nopython=True)
-def y_rotation(vector, theta):
-    """Rotates 3-D vector around y-axis"""
-    R = np.array([[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]])
-    return np.dot(R, vector)
-
-@numba.jit(nopython=True)
-def z_rotation(vector, theta):
-    """Rotates 3-D vector around z-axis"""
-    R = np.array([[np.cos(theta), -np.sin(theta), 0], [np.sin(theta), np.cos(theta), 0], [0, 0, 1]])
-    return np.dot(R, vector)

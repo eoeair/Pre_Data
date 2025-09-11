@@ -6,7 +6,6 @@ Script to process raw data and generate dataset's binary files:
 import os
 import re
 import glob
-import numba
 import psutil
 import numpy as np
 from tqdm import tqdm
@@ -20,94 +19,69 @@ MAX_BODY_KINECT = 4
 NUM_JOINT = 17
 MAX_FRAME = 300
 
-def read_skeleton_filter(file):
+def read_xyz(file, max_body=MAX_BODY_KINECT, num_joint=NUM_JOINT):
+    """
+    读取 skeleton 文件，返回 (C, T, V, M)
+    C: 3 (x,y,z)
+    T: 时间帧数 (pad 到 MAX_FRAME)
+    V: 关节数
+    M: 人数 (筛选能量最大的 MAX_BODY_TRUE 个)
+    """
     with open(file, 'r') as f:
-        skeleton_sequence = {}
-        skeleton_sequence['numFrame'] = int(f.readline())
-        skeleton_sequence['frameInfo'] = []
-        # num_body = 0
-        for t in range(skeleton_sequence['numFrame']):
-            frame_info = {}
-            frame_info['numBody'] = int(f.readline())
-            frame_info['bodyInfo'] = []
+        num_frame = int(f.readline())
+        data = np.zeros((max_body, num_frame, num_joint, 3), dtype=np.float32)
 
-            for m in range(frame_info['numBody']):
-                body_info = {}
-                body_info_key = [
-                    'bodyID', 'clipedEdges', 'handLeftConfidence',
-                    'handLeftState', 'handRightConfidence', 'handRightState',
-                    'isResticted', 'leanX', 'leanY', 'trackingState'
-                ]
-                body_info = {
-                    k: float(v)
-                    for k, v in zip(body_info_key, f.readline().split())
-                }
-                body_info['numJoint'] = int(f.readline())
-                body_info['jointInfo'] = []
-                for v in range(body_info['numJoint']):
-                    joint_info_key = [
-                        'x', 'y', 'z', 'depthX', 'depthY', 'colorX', 'colorY',
-                        'orientationW', 'orientationX', 'orientationY',
-                        'orientationZ', 'trackingState'
-                    ]
-                    joint_info = {
-                        k: float(v)
-                        for k, v in zip(joint_info_key, f.readline().split())
-                    }
-                    body_info['jointInfo'].append(joint_info)
-                frame_info['bodyInfo'].append(body_info)
-            skeleton_sequence['frameInfo'].append(frame_info)
+        for t in range(num_frame):
+            num_body = int(f.readline())
+            for m in range(min(num_body, max_body)):
+                _ = f.readline()  # body info line, 忽略
+                num_joint_this = int(f.readline())
+                for j in range(min(num_joint, num_joint_this)):
+                    vals = list(map(float, f.readline().split()))
+                    data[m, t, j, :] = vals[:3]  # 只取 (x,y,z)
 
-    return skeleton_sequence
+    # -------- Step1: 计算每个人的能量，选出前 MAX_BODY_TRUE -------- #
+    energy = np.zeros(max_body, dtype=np.float32)
+    for m in range(max_body):
+        person = data[m]  # (T,V,C)
+        mask = person.sum(-1).sum(-1) != 0
+        person_valid = person[mask]
+        if len(person_valid) > 0:
+            energy[m] = (
+                person_valid[:, :, 0].std()
+                + person_valid[:, :, 1].std()
+                + person_valid[:, :, 2].std()
+            )
+    select_idx = energy.argsort()[::-1][:MAX_BODY_TRUE]
+    data = data[select_idx, :MAX_FRAME, :, :]  # (M,T,V,C)
 
-@numba.jit(nopython=True)
-def get_nonzero_std(s):  # tvc
-    index = s.sum(-1).sum(-1) != 0  # select valid frames
-    s = s[index]
-    if len(s) != 0:
-        s = s[:, :, 0].std() + s[:, :, 1].std() + s[:, :, 2].std() # three channels
-    else:
-        s = 0
-    return s
+    # -------- Step2: pad 到 MAX_FRAME -------- #
+    T = data.shape[1]
+    if T < MAX_FRAME:
+        pad_shape = (data.shape[0], MAX_FRAME - T, data.shape[2], data.shape[3])
+        data = np.concatenate([data, np.zeros(pad_shape, dtype=np.float32)], axis=1)
 
-
-def read_xyz(file, max_body, num_joint):
-    seq_info = read_skeleton_filter(file)
-    data = np.zeros((max_body, seq_info['numFrame'], num_joint, 3))
-    for n, f in enumerate(seq_info['frameInfo']):
-        for m, b in enumerate(f['bodyInfo']):
-            for j, v in enumerate(b['jointInfo']):
-                if m < max_body and j < num_joint:
-                    data[m, n, j, :] = [v['x'], v['y'], v['z']]
-                else:
-                    pass
-
-    # select two max energy body
-    energy = np.array([get_nonzero_std(x) for x in data])
-    index = energy.argsort()[::-1][0:MAX_BODY_TRUE]
-    data = data[index, :MAX_FRAME, :, :]
-
-    # pad to MAX_FRAME
-    data = np.pad(data, ((0, 0), (0, MAX_FRAME - data.shape[1]), (0, 0), (0, 0)), 'constant', constant_values=0)
-    # pad the null frames with the previous frames
+    # -------- Step3: 修复空帧 -------- #
     for i_p, person in enumerate(data):
         if person.sum() == 0:
             continue
+        # 如果开头全 0 → 用第一个有效段填充
         if person[0].sum() == 0:
-            index = (person.sum(-1).sum(-1) != 0)
-            tmp = person[index].copy()
-            person *= 0
+            mask = (person.sum(-1).sum(-1) != 0)
+            tmp = person[mask].copy()
+            person[:] = 0
             person[:len(tmp)] = tmp
+        # 如果中间有空帧 → 用循环重复填充
         for i_f, frame in enumerate(person):
             if frame.sum() == 0:
                 if person[i_f:].sum() == 0:
                     rest = len(person) - i_f
                     num = int(np.ceil(rest / i_f))
-                    pad = np.concatenate([person[0:i_f] for _ in range(num)], 0)[:rest]
+                    pad = np.concatenate([person[:i_f] for _ in range(num)], axis=0)[:rest]
                     data[i_p, i_f:] = pad
                     break
 
-    return data.transpose(3, 1, 2, 0) # M,T,V,C To C,T,V,M
+    return data.transpose(3, 1, 2, 0)  # (C, T, V, M)
 
 
 def gendata(data_path,split):
@@ -118,10 +92,10 @@ def gendata(data_path,split):
     skeleton_filenames = [os.path.basename(f) for f in glob.glob(os.path.join(data_path, "**.txt"), recursive=True)]
 
     FILENAME_REGEX = r'P\d+S\d+G\d+B\d+H\d+UC\d+LC\d+A(\d+)R\d+_\d+'
-    label = Parallel(n_jobs=psutil.cpu_count(logical=False), backend='threading', verbose=0)(delayed(lambda i: int(re.match(FILENAME_REGEX, i).groups()[0]))(i) for i in skeleton_filenames)
+    label = [int(re.match(FILENAME_REGEX, i).groups()[0]) for i in skeleton_filenames]
     np.save('{}/{}_label.npy'.format(out_path, split), label)
 
-    sample_name = Parallel(n_jobs=psutil.cpu_count(logical=False), backend='threading', verbose=0)(delayed(lambda i: os.path.join(data_path, i))(i) for i in skeleton_filenames)
+    sample_name = [os.path.join(data_path, i) for i in skeleton_filenames]
 
     data = open_memmap('{}/{}_joint.npy'.format(out_path, split),dtype='float32',mode='w+',shape=((len(sample_name), 3, MAX_FRAME, NUM_JOINT, MAX_BODY_TRUE)))
     
