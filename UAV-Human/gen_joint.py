@@ -14,12 +14,13 @@ from numpy.lib.format import open_memmap
 
 from preprocess import pre_normalization
 
+# dataset-level param （be profiled before process）
 MAX_BODY_TRUE = 2
 MAX_BODY_KINECT = 4
 NUM_JOINT = 17
 MAX_FRAME = 300
 
-def read_xyz(file, max_body=MAX_BODY_KINECT, num_joint=NUM_JOINT):
+def read_xyz(file):
     """
     读取 skeleton 文件，返回 (C, T, V, M)
     C: 3 (x,y,z)
@@ -29,23 +30,23 @@ def read_xyz(file, max_body=MAX_BODY_KINECT, num_joint=NUM_JOINT):
     """
     with open(file, 'r') as f:
         num_frame = int(f.readline())
-        data = np.zeros((max_body, num_frame, num_joint, 3), dtype=np.float32)
+        data = np.zeros((MAX_BODY_KINECT, MAX_FRAME, NUM_JOINT, 3), dtype=np.float32) # M T V C
 
         for t in range(num_frame):
             num_body = int(f.readline())
-            for m in range(min(num_body, max_body)):
+            for m in range(num_body):
                 _ = f.readline()  # body info line, 忽略
-                num_joint_this = int(f.readline())
-                for j in range(min(num_joint, num_joint_this)):
+                _ = int(f.readline()) # num_joint line,忽略
+                for j in range(NUM_JOINT):
                     vals = list(map(float, f.readline().split()))
                     data[m, t, j, :] = vals[:3]  # 只取 (x,y,z)
 
     # -------- Step1: 计算每个人的能量，选出前 MAX_BODY_TRUE -------- #
-    energy = np.zeros(max_body, dtype=np.float32)
-    for m in range(max_body):
+    energy = np.zeros(MAX_BODY_KINECT, dtype=np.float32)
+    for m in range(MAX_BODY_KINECT):
         person = data[m]  # (T,V,C)
         mask = person.sum(-1).sum(-1) != 0
-        person_valid = person[mask]
+        person_valid = person[mask] # 非空帧
         if len(person_valid) > 0:
             energy[m] = (
                 person_valid[:, :, 0].std()
@@ -55,13 +56,7 @@ def read_xyz(file, max_body=MAX_BODY_KINECT, num_joint=NUM_JOINT):
     select_idx = energy.argsort()[::-1][:MAX_BODY_TRUE]
     data = data[select_idx, :MAX_FRAME, :, :]  # (M,T,V,C)
 
-    # -------- Step2: pad 到 MAX_FRAME -------- #
-    T = data.shape[1]
-    if T < MAX_FRAME:
-        pad_shape = (data.shape[0], MAX_FRAME - T, data.shape[2], data.shape[3])
-        data = np.concatenate([data, np.zeros(pad_shape, dtype=np.float32)], axis=1)
-
-    # -------- Step3: 修复空帧 -------- #
+    # -------- Step2: 修复空帧 -------- #
     for i_p, person in enumerate(data):
         if person.sum() == 0:
             continue
@@ -99,18 +94,13 @@ def gendata(data_path,split):
 
     data = open_memmap('{}/{}_joint.npy'.format(out_path, split),dtype='float32',mode='w+',shape=((len(sample_name), 3, MAX_FRAME, NUM_JOINT, MAX_BODY_TRUE)))
     
-    Parallel(n_jobs=psutil.cpu_count(logical=False), verbose=0)(delayed(lambda i,s: data.__setitem__(i,read_xyz(s, max_body=MAX_BODY_KINECT, num_joint=NUM_JOINT)))(i,s) for i,s in enumerate(tqdm(sample_name)))
-
-    # check no skeleton
-    for i in range(len(data)):
-        if np.all(data[i,:] == 0):
-            print("{} {} has no skeleton".format(data_path, i))
+    Parallel(n_jobs=psutil.cpu_count(logical=False), verbose=0)(delayed(lambda i,s: data.__setitem__(i,read_xyz(s)))(i,s) for i,s in enumerate(tqdm(sample_name)))
 
     data = data.transpose(0, 4, 2, 3, 1)  # N, C, T, V, M  to  N, M, T, V, C
 
     # Center the human at origin
     # center_joint: body joint index indicating center of body
-    # sub the center joint #1 (spine joint in ntu and neck joint in kinetics)'
+    # sub the center joint #1 (spine joint in ntu and neck joint in kinetics)
     for i_s, skeleton in enumerate(data):
         if skeleton.sum() == 0:
             continue
