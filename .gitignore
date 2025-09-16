@@ -5,8 +5,8 @@ NTURGB-D/ST-GCN/data/xview
 
 UAV-Human/__pycache__
 UAV-Human/data/*.zip
-UAV-Human/data/v1
-UAV-Human/data/v2
+UAV-Human/data/v1*
+UAV-Human/data/v2*
 UAV-Human/data/Skeleton
 UAV-Human/pose_data_tools/__pycache__
 
